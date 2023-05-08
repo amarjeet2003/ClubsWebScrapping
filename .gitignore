@@ -1,3 +1,4 @@
 .env
 venv
 companies_data.csv
+new.py

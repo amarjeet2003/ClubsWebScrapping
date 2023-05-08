@@ -6,6 +6,7 @@ import time
 import os
 from dotenv import load_dotenv
 from urllib.parse import urljoin
+import googlemaps
 
 load_dotenv()
 
@@ -80,13 +81,104 @@ def generate_descriptions(companies_data, api_key, model_engine):
 
     return companies_data_with_descriptions
 
+def test_cases_scrapped_data(start_url):
+    companies_data = fetch_companies_data(start_url)
+    for _, company in companies_data.iterrows():
+        assert company['name'] != '', "Company name missing"
+        assert company['address_line1'] != '', "Address line 1 missing"
+        assert company['address_line2'] != '', "Address line 2 missing"
+        assert company['city'] != '', "City missing"
+        assert company['state'] != '', "State missing"
+        assert company['phone'] != '', "Phone number missing"
+        phone = company['phone']
+        assert phone.startswith('0'), f"Invalid phone number format: {phone}"
+        assert len(phone) == 10, f"Invalid phone number length: {phone}"
+        assert phone.isdigit(), f"Phone number contains non-numeric characters: {phone}"
+        website = company['website']
+        if website != '':
+            assert website.startswith('http'), f"Invalid website URL format: {website}"
+            assert requests.get(website).status_code == 200, f"Invalid website URL: {website}"
+
+
+
+def search_business(query):
+    gmaps = googlemaps.Client(key=os.getenv("GOOGLE_MAPS_API_KEY"))
+
+    # Geocoding an address
+    geocode_result = gmaps.geocode(query)
+
+    # Search for business based on geolocation
+    location = geocode_result[0]['geometry']['location']
+    places_result = gmaps.places_nearby(location=location, radius=500, type='establishment')
+
+    # Find the first result that matches the query
+    for result in places_result['results']:
+        if result['name'] == query:
+            # Get details for the business
+            place_id = result['place_id']
+            place_result = gmaps.place(place_id=place_id)
+            website = place_result['result']['website']
+            phone_number = place_result['result']['formatted_phone_number']
+            return website, phone_number
+
+    return None, None
 
 
 def main():
     start_url = os.getenv("API_URL")
     
     companies_data = fetch_companies_data(start_url)
+
+    # test_cases_scrapped_data(start_url)
+
     df = pd.DataFrame(companies_data)
+
+    websites = []
+    phone_numbers = []
+    for _, company in df.iterrows():
+        query = f"{company['name']}, {company['address_line1']}, {company['address_line2']}, {company['city']}, {company['state']}"
+        website, phone_number = search_business(query)
+        websites.append(website)
+        phone_numbers.append(phone_number)
+
+    df['website'] = websites
+    df['phone'] = phone_numbers
+
+    # Test Case 1
+    # Test with a valid business query
+    query = "Starbucks, New York"
+    expected_website = "https://www.starbucks.com/"
+    expected_phone_number = "+1 212-989-4016"
+    assert search_business(query) == (expected_website, expected_phone_number)
+
+    # Test Case 2
+    # Test with a valid business query but no website or phone number available
+    query = "Statue of Liberty, New York"
+    expected_website = None
+    expected_phone_number = None
+    assert search_business(query) == (expected_website, expected_phone_number)
+
+    # Test Case 3
+    # Test with an invalid business query
+    query = "Some random business"
+    expected_website = None
+    expected_phone_number = None
+    assert search_business(query) == (expected_website, expected_phone_number)
+
+    # Test Case 4
+    # Test with a query containing special characters
+    query = "McDonald's, San Francisco"
+    expected_website = "https://www.mcdonalds.com/us/en-us.html"
+    expected_phone_number = "+1 415-864-0337"
+    assert search_business(query) == (expected_website, expected_phone_number)
+
+    # Test Case 5
+    # Test with a query containing non-ASCII characters
+    query = "Café du Monde, New Orleans"
+    expected_website = "https://www.cafedumonde.com/"
+    expected_phone_number = "+1 504-581-2914"
+    assert search_business(query) == (expected_website, expected_phone_number)
+
 
     df.to_csv('companies_data.csv', index=False)
 
